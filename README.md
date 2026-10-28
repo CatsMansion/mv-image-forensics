@@ -1,2 +1,59 @@
 # mv-image-forensics
-Agent skill: tell whether an image is soft, and prove whether your own pipeline softened it - same-size 1:1 eyes-on for the symptom, per-pixel diff against the generator original for the responsibility. Includes three failed sharpness metrics with their exact wrong numbers.
+
+**「这张图糊不糊」和「是不是我把它弄糊的」是两个问题。第一个用眼睛，第二个用逐位 diff。⛔ 两个都不要用指标回答。**
+
+这是 2026-10-28 一天之内、连续撤掉三把自制清晰度尺子和两条自己的结论之后写下来的。
+
+## 它解决什么
+
+用户说「新出的图都糊完了，就 F1 的清晰度勉强够」的时候，你实际面对两个任务：
+
+| 任务 | 错答的代价 |
+|---|---|
+| **症状**：糊不糊？要不要返工？ | 用指标答 ⇒ 会把**最糊的那张报成最清晰**（这批数据上真的发生了，F2 被报成 1.64× 锚图） |
+| **责任**：是生成端本来就软，还是我的后处理/放大弄糊的？ | 用指标答 ⇒ 指标里根本没有"谁改的"这个信息，只会编出假根因 |
+
+## 里面有什么
+
+- **症状的两步法** —— 同角色高归一 + 原像素 1:1（⛔ 不放大），再压到**成片角色高**看一次。缩小会掩盖软，压下去还看得出就必须返工。
+- **三把不可用的尺子，附各自的错误数字** —— 归一化拉普拉斯方差 / 径向频谱悬崖 / 内线锐边%，以及它们的共同病根（单图绝对量测不出相对判断）。
+- **「有 alpha 通道 ≠ 真透明底」** —— 实测锚图 alpha min=max=255、底色纯绿，按 alpha 取前景把角色高算成 1920（真值 1694），整张图被额外缩小 12%。一个错误的分割会伪装成"这张景别不同"。
+- **责任取证的硬口径** —— 原始档路径通常就写在你自己的交付脚本里；前景内逐位 diff（⛔ 不统计全图，背景键控差异会淹没角色）；97%+ 逐位相同即无罪。
+- **一张"别再试"清单** —— 配对失败的三张废稿、bbox 占画幅推景别、误判原生尺寸、交付脚本没留 RAW 映射、派单没落盘。
+- **两个零依赖脚本**。
+
+## 脚本
+
+```bash
+# 1) 症状：同角色高归一 + 1:1
+python scripts/same_head_compare.py --out cmp.png --body-h 900 --tile-w 240 \
+    --img "锚图=P0.png" --img "F1=LU01_F1.png" --img "F2=LU01_F2.png"
+
+# 2) 责任：源 vs 交付，前景内逐位 diff
+python scripts/pixel_forensics.py --src <generator_original>.png --del LU01_F1.png --pad-w 1080
+# fg diff==0 ratio : 97.59%
+# VERDICT: 后处理对角色像素零损伤 ⇒ 糊来自生成端
+```
+
+零依赖（numpy + opencv）。中文路径统一走 `np.fromfile` + `cv2.imdecode`。
+
+## 实测锚点（同批 5 张）
+
+| 图 | 源 → 交付 | 前景内 diff==0 |
+|---|---|---|
+| H1 | 1024×1024 → 1024×1024 | **98.98%** |
+| F1 | 1072×1920 → 1080×1920（左右各补 4px） | **97.59%** |
+| F2 | 1072×1920 → 1080×1920 | **97.32%** |
+| F3 | 1072×1920 → 1080×1920 | **97.42%** |
+
+⇒ 后处理、补边、键控对角色像素零损伤。糊是生成端带来的。
+
+## 它在 MV 技能族里的位置
+
+索引在 [`mv-playbook`](https://github.com/CatsMansion/mv-playbook)。本 skill 管「图质判定与责任归属」，
+上游是 `mv-character-assets`（角色资产要多少张）和 `consistent-character-mv-anchor`（怎么出得一致），
+下游是 `mv-shot-audit`（成片审片）。
+
+## Licence
+
+MIT. See `LICENSE`.
